@@ -1,13 +1,13 @@
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from collections import defaultdict
 from transformers import AutoModel
-from tqdm import tqdm
 import re
 from unidecode import unidecode
 import inflect
 import ast
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 p = inflect.engine()
 
@@ -146,7 +146,6 @@ def calc_avg_semantic_diversity(model, qid_to_texts):
         upper_triangular = similarity_matrix[np.triu_indices(len(texts), k=1)]
         diversity = 1 - np.mean(upper_triangular)
         diversities.append(diversity)
-    
     return np.mean(diversities) if diversities else 0
 
 def calc_ingredients_diversity(qid_to_ingredients):
@@ -161,6 +160,26 @@ def calc_ingredients_diversity(qid_to_ingredients):
         if all_ingredients > 0:
             diversity_ingredient = 1.0 * len(ingredients_set) / all_ingredients
             diversities.append(diversity_ingredient)
-    
     return np.mean(diversities) if diversities else 0
 
+def calc_similarity(qid_to_texts, ground_truth):
+    similarities = []
+    model = AutoModelForSequenceClassification.from_pretrained('BAAI/bge-reranker-v2-m3').to('cuda')
+    tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-reranker-v2-m3')
+    min_score = -10.0
+    max_score = 6.0
+    for qid, texts in qid_to_texts.items():
+        query = ground_truth[qid]
+        pairs = [[query, doc] for doc in texts]
+        with torch.no_grad():
+            inputs = tokenizer(pairs, padding=True, truncation=True, return_tensors='pt', max_length=128)
+            inputs = {k: v.to('cuda') for k, v in inputs.items()}
+            scores = model(**inputs, return_dict=True).logits.view(-1, ).float()
+            for score in scores:
+                score = (score - min_score) / (max_score - min_score)
+                similarities.append(score)
+    similarities = [sim.cpu().numpy() for sim in similarities]
+    similarities = np.array(similarities)
+    return similarities.mean() if similarities.size > 0 else 0
+    
+    

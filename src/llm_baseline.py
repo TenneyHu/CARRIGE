@@ -1,14 +1,17 @@
 from carrot_processing import load_recipe_adaption_query
-import transformers
-import torch
 import argparse
+from llama_index.llms.ollama import Ollama
+from llama_index.core import PromptTemplate
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--t', type=float, default=0.7,
+parser.add_argument('--t', type=float, default=1.2,
                     help='Temperature for text generation')
-parser.add_argument('--minp', type=float, default=0.1,
+parser.add_argument('--min_p', type=float, default=0.05,
                     help='Min_P for text generation')
+parser.add_argument('--model', type=str, default='llama3.1',
+                    help='Model name')
+
 args = parser.parse_args()
 
 
@@ -30,31 +33,21 @@ template_query_str = (
     "Por favor, empieza con \"Nombre: \" y no añadas ningún otro texto fuera de este formato."
     "Mejor respuesta:"
 )
-
 queries = load_recipe_adaption_query("./data/input.txt")
-
 qid = 0
+llm = Ollama(model=args.model, request_timeout=300.0, temperature=args.t, min_p=args.min_p)
 
-model_dir = "/data2/huggingface-mirror/dataroot/models/meta-llama/Meta-Llama-3.1-8B-Instruct/"
-
-pipeline = transformers.pipeline(
-    "text-generation",
-    model=model_dir,
-    model_kwargs={"torch_dtype": torch.bfloat16},
-    device_map="cuda:3",
-)
-
+carrot_prompt = PromptTemplate(template_query_str)
 for query in queries:
     for num in range(5):
-        prompt = [
-            {"role": "user", "content": template_query_str.format(query_str=query)}
-        ]
-        outputs = pipeline(
-            prompt,
-            max_new_tokens=512,
-            min_p=0.1,
-        )
-        response = outputs[0]["generated_text"][-1]['content']
-        res = response.replace("\n", "\t")
-        print(str(qid) + "\t" + res)
-    qid += 1
+        try:
+            index = str(qid)
+            req = carrot_prompt.format(query_str=query)
+            response = llm.complete(req)
+            res = str(response).replace("\n", "\t")
+            print(str(qid) + "\t" + res)
+
+        except Exception as e:
+            print(f"Error processing query {qid}: {e}")
+    qid += 1 
+

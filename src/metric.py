@@ -1,14 +1,6 @@
-from transformers import AutoModel
-import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
 import argparse
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from tqdm import tqdm
-from metrics_utils import calc_ingredients_diversity, calc_avg_semantic_diversity
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-import torch
-import numpy as np
+from transformers import AutoModel
+from metrics_utils import calc_ingredients_diversity, calc_avg_semantic_diversity, calc_similarity
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -27,64 +19,56 @@ def parse_args():
 def load_model(model_name, device):
     return AutoModel.from_pretrained(model_name, trust_remote_code=True).to(device)
 
-def calc_similarity(qid_to_texts, ground_truth):
-    similarities = []
-    model = AutoModelForSequenceClassification.from_pretrained('BAAI/bge-reranker-v2-m3').to('cuda')
-    tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-reranker-v2-m3')
-    min_score = -10.0
-    max_score = 6.0
-    for qid, texts in qid_to_texts.items():
-        query = ground_truth[qid]
-        pairs = [[query, doc] for doc in texts]
-        with torch.no_grad():
-            inputs = tokenizer(pairs, padding=True, truncation=True, return_tensors='pt', max_length=128)
-            inputs = {k: v.to('cuda') for k, v in inputs.items()}
-            scores = model(**inputs, return_dict=True).logits.view(-1, ).float()
-            for score in scores:
-                score = (score - min_score) / (max_score - min_score)
-                similarities.append(score)
-    return sum(similarities) / len(similarities)
-
 if __name__ == "__main__":
     args = parse_args()
     model = load_model(args.model_name, args.device)
     res = []
+    filelist = ["./temp"]
+    qid_to_title = {}
+    qid_to_ingredients = {}
+    for file in filelist:
+        with open(file, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split('\t')
 
-filelist = ["./logs/baseline_llama_0.7.out"]
-qid_to_title = {}
-qid_to_ingredients = {}
-for file in filelist:
-    with open(file, 'r', encoding='utf-8') as f:
+                if len(parts) >= 2:
+                    qid = parts[0]
+                    title = parts[1].split("Ingredientes")[0].lstrip("Nombre: ")
+                    title = title.lstrip("Nombre: ").rstrip()
+                    ingredients = ""
+                    collecting = False
+                    for x in parts:
+                        if x.strip() == "Ingredientes:":
+                            collecting = True
+                            continue
+                        elif x.strip() == "Pasos:":
+                            break
+                        if collecting:
+                            ingredients += x + " "
+
+                    if qid not in qid_to_title:
+                        qid_to_title[qid] = []
+                        qid_to_ingredients[qid] = []
+                    qid_to_title[qid].append(title)
+                    qid_to_ingredients[qid].append(ingredients)
+
+    #print ("Exaples Titles: ",qid_to_title['0'])
+    #print ("Exaples Ingredients: ",qid_to_ingredients['0'])
+    ground_truth = {}
+    qid = 0
+    with open("./data/input.txt", 'r', encoding='utf-8') as f:
         for line in f:
             parts = line.strip().split('\t')
-            if len(parts) >= 2:
-                qid = parts[0]
-                title = parts[1].split("Ingredientes")[0].lstrip("Nombre: ")
-                title = title.lstrip("Nombre: ").rstrip()
-                try:
-                    ingredients = parts[1].split("Ingredientes")[1].lstrip("Ingredientes: ").split("Pasos")[0].rstrip()
-                except:
-                    ingredients = ""
+            title = parts[0].lstrip("Nombre: ")
+            ground_truth[str(qid)] = title
+            qid += 1
 
-                if qid not in qid_to_title:
-                    qid_to_title[qid] = []
-                    qid_to_ingredients[qid] = []
-                qid_to_title[qid].append(title)
-                qid_to_ingredients[qid].append(ingredients)
-
-#print ("Exaples Titles: ",qid_to_title['0'])
-#print ("Exaples Ingredients: ",qid_to_ingredients['0'])
-ground_truth = {}
-qid = 0
-with open("./data/input.txt", 'r', encoding='utf-8') as f:
-    for line in f:
-        parts = line.strip().split('\t')
-        title = parts[0].lstrip("Nombre: ")
-        ground_truth[str(qid)] = title
-        qid += 1
-
-similarity_score = calc_similarity(qid_to_title, ground_truth)
-ingredients_diversity_score = calc_ingredients_diversity(qid_to_ingredients)
-diversity = calc_avg_semantic_diversity(model, qid_to_title)
-print (f"{ingredients_diversity_score:.3f}", f"{diversity:.3f}", f"{float(similarity_score):.3f}")
+    similarity_score = calc_similarity(qid_to_title, ground_truth)
+    ingredients_diversity_score = calc_ingredients_diversity(qid_to_ingredients)
+    diversity = calc_avg_semantic_diversity(model, qid_to_title)
+    print(
+        f"Ingredients Diversity Score: {ingredients_diversity_score:.3f}, "
+        f"Lexical Diversity: {diversity:.3f}, "
+        f"Similarity Score: {float(similarity_score):.3f}"
+    )
 
