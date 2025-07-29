@@ -1,13 +1,16 @@
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from transformers import AutoModel
 import re
+from bert_score import BERTScorer
 from unidecode import unidecode
 import inflect
+from tqdm import tqdm
+import torch.nn.functional as F
 import ast
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, BertTokenizer, BertForSequenceClassification
+from collections import Counter
 
 p = inflect.engine()
 
@@ -148,8 +151,22 @@ def calc_avg_semantic_diversity(model, qid_to_texts):
         diversities.append(diversity)
     return np.mean(diversities) if diversities else 0
 
-def calc_ingredients_diversity(qid_to_ingredients):
-    diversities = []
+
+
+def count_ingredients(qid_to_ingredients):
+    ingredient_counter = Counter()
+    total_indgredients = 0.0
+    for texts in qid_to_ingredients.values():
+        selected_texts = texts[0] 
+        ingredient_list = clean_ingredients(selected_texts, ai_generated=True)
+        total_indgredients += len(ingredient_list)
+        ingredient_counter.update(ingredient_list)
+    total_indgredients /= len(qid_to_ingredients)
+    sorted_ingredients = ingredient_counter.most_common()
+    return len(sorted_ingredients) / total_indgredients, sorted_ingredients
+
+def calc_perinput_ingredients_diversity(qid_to_ingredients):
+    avg_diversities = []
     for texts in qid_to_ingredients.values():
         ingredients_set = set()
         all_ingredients = 0  
@@ -159,8 +176,24 @@ def calc_ingredients_diversity(qid_to_ingredients):
             ingredients_set.update(set(ingredient_list))
         if all_ingredients > 0:
             diversity_ingredient = 1.0 * len(ingredients_set) / all_ingredients
-            diversities.append(diversity_ingredient)
-    return np.mean(diversities) if diversities else 0
+            avg_diversities.append(diversity_ingredient)
+    return np.mean(avg_diversities) 
+
+def calc_acrossinput_ingredients_diversity(qid_to_ingredients, K=5):
+    diversity_counts = []
+    for k in range(K):
+        ingredients_set = set()
+        total_ingredients = 0.0
+        for texts in qid_to_ingredients.values():
+            if len(texts) > k:
+                ingredients = texts[k]
+                ingredient_list = clean_ingredients(ingredients, ai_generated=True)
+                total_ingredients += len(ingredient_list)
+                ingredients_set.update(ingredient_list)
+
+        diversity_counts.append(len(ingredients_set) / total_ingredients)
+    return sum(diversity_counts) / len(diversity_counts) if diversity_counts else 0.0
+
 
 def calc_similarity(qid_to_texts, ground_truth):
     similarities = []
@@ -181,5 +214,106 @@ def calc_similarity(qid_to_texts, ground_truth):
     similarities = [sim.cpu().numpy() for sim in similarities]
     similarities = np.array(similarities)
     return similarities.mean() if similarities.size > 0 else 0
+
+
+def calc_bertscore_similarity(qid_to_texts, ground_truth, lang='es'):
+    similarities = []
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    scorer = BERTScorer(lang=lang, rescale_with_baseline=True, device=device)
     
+    for qid, texts in qid_to_texts.items():
+        query = ground_truth[qid]
+        cands = texts
+        refs = [query] * len(cands)
+        _, _, F1 = scorer.score(cands, refs)
+        similarities.extend(F1.tolist())
     
+    similarities = np.array(similarities)
+    return similarities.mean() if similarities.size > 0 else 0.0
+
+
+def calc_cas(qid_to_texts, batch_size=64):
+    cas_scores = []
+
+    model_path = "./CAS/checkpoint-69/"
+    model_name = "dccuchile/bert-base-spanish-wwm-cased"
+
+    tokenizer = BertTokenizer.from_pretrained(model_name)
+    model = BertForSequenceClassification.from_pretrained(model_path)
+    model.eval()
+
+    all_texts = []
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+
+    for texts in qid_to_texts.values():
+        all_texts.extend(texts)
+
+    for i in range(0, len(all_texts), batch_size):
+        batch_texts = all_texts[i:i+batch_size]
+        inputs = tokenizer(batch_texts, return_tensors="pt", truncation=True, padding="max_length")
+        inputs = {k: v.to(device) for k, v in inputs.items()} 
+
+        with torch.no_grad():
+            logits = model(**inputs).logits
+            probs = F.softmax(logits, dim=1)
+            esp_probs = probs[:, 1]
+            cas_scores.extend(esp_probs.tolist())
+
+
+    return np.mean(cas_scores) if cas_scores else 0.0
+
+def compute_global_avg_uniq_n(text_dict, K=5, max_n=3):
+
+    def get_ngrams(tokens, n):
+        return [tuple(tokens[i:i+n]) for i in range(len(tokens) - n + 1)]
+    
+    all_k_avg_ratios = []
+    for k in range(K):
+        selected_texts = []
+        for texts in text_dict.values():
+            if len(texts) > k:
+                selected_texts.append(texts[k])
+        uniq_ratios = []
+
+        for n in range(1, max_n + 1):
+            all_ngrams = []
+            for text in selected_texts:
+                tokens = text.strip().split()
+                all_ngrams.extend(get_ngrams(tokens, n))
+            total = len(all_ngrams)
+            unique = len(set(all_ngrams))
+            ratio = unique / total if total > 0 else 0
+            uniq_ratios.append(ratio)
+            print (n, uniq_ratios) 
+        avg_ratio_for_k = sum(uniq_ratios) / len(uniq_ratios) if uniq_ratios else 0
+        
+        all_k_avg_ratios.append(avg_ratio_for_k)
+    
+
+    return sum(all_k_avg_ratios) / len(all_k_avg_ratios) if all_k_avg_ratios else 0.0
+    
+def compute_per_input_avg_uniq_n(text_dict, max_n=3):
+    def get_ngrams(tokens, n):
+        return [tuple(tokens[i:i+n]) for i in range(len(tokens) - n + 1)]
+
+    per_input_avg_ratios = []
+
+    for _, texts in text_dict.items():
+        uniq_ratios = []
+
+        for n in range(1, max_n + 1):
+            all_ngrams = []
+            for text in texts:
+                tokens = text.strip().split()
+                all_ngrams.extend(get_ngrams(tokens, n))
+            total = len(all_ngrams)
+            unique = len(set(all_ngrams))
+            ratio = unique / total if total > 0 else 0
+            uniq_ratios.append(ratio)
+
+        avg_ratio = sum(uniq_ratios) / len(uniq_ratios) if uniq_ratios else 0
+        per_input_avg_ratios.append(avg_ratio)
+
+    return sum(per_input_avg_ratios) / len(per_input_avg_ratios) if per_input_avg_ratios else 0.0

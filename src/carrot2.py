@@ -166,11 +166,11 @@ class CarrotRetriever():
             for doc in docs:
                 embeddings.append(self.emb_model.get_text_embedding(doc))
             embeddings = np.array(embeddings)
-            
+            beta = 0.8
             if self.reranking_type == "MMR*":
                 for doc in self.history_generated_results:
                     history_vectors.append(np.array(self.emb_model.get_text_embedding(doc)))
-                beta = 0.8
+                
 
             for num in range(self.final_res_num):
                 mmr_scores = []

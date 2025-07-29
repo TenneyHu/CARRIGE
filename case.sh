@@ -1,0 +1,1 @@
+cat ./logs/llm_llama3.1_latest_temp0.7.out | grep "longaniza en salsa verde con papas y nopales"

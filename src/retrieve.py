@@ -6,9 +6,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Recipe RAG System')
     parser.add_argument('--emb_model', type=str, default='jinaai/jina-embeddings-v2-base-es',
                         help='Name of the embedding model to use')
-    parser.add_argument('--index_dir', type=str, default='/data1/zjy/spanish_adaption_index/',
+    parser.add_argument('--index_dir', type=str, default='/data2/zjy/spanish_adaption_index/',
                         help='Directory to save/load the index')
-    parser.add_argument('--save_index', type=int, default=0,
+    parser.add_argument('--save_index', type=int, default=1,
                         help='switch of saving index to the disk')
     parser.add_argument('--debugging', type=int, default=0,
                         help='display rettrieve logs')
@@ -18,7 +18,7 @@ def parse_args():
                         help='switch of reranking')
     parser.add_argument('--reranking_type', type=str, default="relevance",
                         help='type of reranking')
-    parser.add_argument('--reranking_alpha', type=float, default=0.7,
+    parser.add_argument('--reranking_alpha', type=float, default=0.6,
                         help='contorl of diversity in reranking')
     parser.add_argument('--input_file_dir', type=str, default="./data/input.txt",
                         help='input file dir')
