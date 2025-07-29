@@ -21,6 +21,9 @@ CARRIAGE is a plug-and-play Retrieval-Augmented Generation (RAG) framework desig
 git clone https://github.com/TenneyHu/CARRIGE.git
 cd CARRIGE
 pip install -r requirements.txt
+```
 
 ## Quick Start
+```bash
 bash run.sh
+```
